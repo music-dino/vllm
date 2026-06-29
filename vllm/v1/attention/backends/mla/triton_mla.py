@@ -30,7 +30,20 @@ logger = init_logger(__name__)
 
 
 class TritonMLAMetadataBuilder(MLACommonMetadataBuilder[MLACommonMetadata]):
-    _cudagraph_support: ClassVar[AttentionCGSupport] = AttentionCGSupport.UNIFORM_BATCH
+    # The Triton decode kernel maps each query row 1:1 to a request (no
+    # qo_indptr), so it only supports single-token decodes. FULL cudagraph
+    # capture is therefore limited to pure single-token decode batches;
+    # multi-token spec-decode batches fall back to PIECEWISE automatically.
+    #
+    # Do NOT promote this to UNIFORM_BATCH with query_len_support=UNIFORM to
+    # enable spec-decode capture: that clears the max_query_len assert but the
+    # kernel then receives num_reqs * query_len query rows against only num_reqs
+    # entries in seq_lens / block_table (e.g. 512 rows vs 256 seq_lens for
+    # query_len=2), reading the wrong request per row. UNIFORM requires a
+    # qo_indptr-aware kernel like rocm_aiter_mla, which this backend lacks.
+    _cudagraph_support: ClassVar[AttentionCGSupport] = (
+        AttentionCGSupport.UNIFORM_SINGLE_TOKEN_DECODE
+    )
 
 
 class TritonMLABackend(MLACommonBackend):
