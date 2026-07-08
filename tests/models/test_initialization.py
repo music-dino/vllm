@@ -2,17 +2,11 @@
 # SPDX-FileCopyrightText: Copyright contributors to the vLLM project
 
 from functools import partial
-from unittest.mock import patch
 
 import pytest
 
 from vllm import LLM
 from vllm.utils.mem_constants import GiB_bytes
-from vllm.v1.core.kv_cache_utils import (
-    generate_scheduler_kv_cache_config,
-    get_kv_cache_configs,
-)
-from vllm.v1.engine.core import EngineCore as V1EngineCore
 
 from ..utils import create_new_process_for_each_test
 from .registry import (
@@ -56,12 +50,14 @@ OTHER_MODEL_ARCH_LIST = set(HF_EXAMPLE_MODELS.get_supported_archs()) - set(
 def can_initialize(
     model_arch: str, monkeypatch: pytest.MonkeyPatch, EXAMPLE_MODELS: HfExampleModels
 ):
-    """The reason for using create_new_process_for_each_test is to avoid
-    the WARNING:
-        "We must use the 'spawn' multiprocessing start method. Overriding
-        VLLM_WORKER_MULTIPROC_METHOD to 'spawn'."
-    The spawn process causes the _initialize_kv_caches_v1 function below to
-    become ineffective.
+    """Run each test in a separate process for isolation.
+
+    Memory profiling and model warmup/cudagraph capture (and the model forward
+    passes they require) are skipped by setting
+    ``VLLM_TEST_KV_CACHE_MEMORY_BYTES``, which the engine core reads to use a
+    fixed KV cache memory budget. Using an env var (rather than monkeypatching
+    ``EngineCore._initialize_kv_caches``) makes this work whether the engine
+    core is forked or spawned -- e.g. on ROCm/XPU where spawn is forced.
     """
 
     model_info = EXAMPLE_MODELS.get_hf_info(model_arch)
@@ -78,25 +74,6 @@ def can_initialize(
         exist_overrides=model_info.hf_overrides,
         use_original_num_layers=getattr(model_info, "use_original_num_layers", False),
     )
-
-    # Avoid calling model.forward()
-    def _initialize_kv_caches_v1(self, vllm_config):
-        kv_cache_specs = self.model_executor.get_kv_cache_specs()
-        kv_cache_configs = get_kv_cache_configs(
-            vllm_config,
-            kv_cache_specs,
-            [10 * GiB_bytes],
-        )
-        scheduler_kv_cache_config = generate_scheduler_kv_cache_config(kv_cache_configs)
-        vllm_config.cache_config.num_gpu_blocks = scheduler_kv_cache_config.num_blocks
-        kv_cache_groups = scheduler_kv_cache_config.kv_cache_groups
-        if kv_cache_groups:
-            vllm_config.cache_config.block_size = min(
-                g.kv_cache_spec.block_size for g in kv_cache_groups
-            )
-
-        vllm_config.validate_block_size()
-        return scheduler_kv_cache_config
 
     if model_arch == "MoonshotKimiaForCausalLM":
         pytest.skip(
@@ -125,10 +102,12 @@ def can_initialize(
                 f"capability {capability.major}.{capability.minor}"
             )
 
-    with (
-        patch.object(V1EngineCore, "_initialize_kv_caches", _initialize_kv_caches_v1),
-        monkeypatch.context() as m,
-    ):
+    with monkeypatch.context() as m:
+        # Skip memory profiling (and the model forward pass it requires) by
+        # giving the engine core a fixed KV cache memory budget via env var.
+        # Env-var based so it survives engine-core spawn (e.g. on ROCm/XPU).
+        m.setenv("VLLM_TEST_KV_CACHE_MEMORY_BYTES", str(10 * GiB_bytes))
+
         # FIXME: A hack to bypass FA3 assertion because our CI's L4 GPU
         # has cc==8.9 which hasn't supported FA3 yet. Remove this hack when
         # L4 supports FA3.

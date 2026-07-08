@@ -284,6 +284,7 @@ if TYPE_CHECKING:
     VLLM_ELASTIC_EP_SCALE_UP_LAUNCH: bool = False
     VLLM_ELASTIC_EP_DRAIN_REQUESTS: bool = False
     VLLM_MEMORY_PROFILER_ESTIMATE_CUDAGRAPHS: bool = True
+    VLLM_TEST_KV_CACHE_MEMORY_BYTES: int | None = None
     VLLM_NIXL_EP_MAX_NUM_RANKS: int = 32
     VLLM_XPU_ENABLE_XPU_GRAPH: bool = False
     VLLM_XPU_USE_SAMPLER_KERNEL: bool = True
@@ -1947,6 +1948,14 @@ environment_variables: dict[str, Callable[[], Any]] = {
     # Should only be set by EngineCoreClient.
     "VLLM_ELASTIC_EP_SCALE_UP_LAUNCH": lambda: bool(
         int(os.getenv("VLLM_ELASTIC_EP_SCALE_UP_LAUNCH", "0"))
+    ),
+    # Test-only: when set, `_initialize_kv_caches` uses this value (in bytes) as
+    # the per-worker KV cache memory budget and skips both memory profiling and
+    # model warmup/cudagraph capture (i.e. the model forward passes they
+    # require). Used by model-initialization tests so they work regardless of
+    # whether the engine core is forked or spawned.
+    "VLLM_TEST_KV_CACHE_MEMORY_BYTES": lambda: maybe_convert_int(
+        os.environ.get("VLLM_TEST_KV_CACHE_MEMORY_BYTES", None)
     ),
     # Whether to wait for all requests to drain before sending the
     # scaling command in elastic EP.
