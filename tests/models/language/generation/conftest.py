@@ -13,7 +13,7 @@ from vllm.platforms import current_platform
 def pytest_configure(config):
     """Early ROCm configuration that must happen before test collection.
 
-    Both the skinny-GEMM env var and the SDP/matmul settings are applied here
+    Both the skinny-GEMM env var and the SDP settings are applied here
     (not in ``pytest_sessionstart``). ``pytest_sessionstart`` only fires for
     *initial* conftests on the CLI arg path; when the suite is collected via a
     parent directory (e.g. ``pytest models/language``), this conftest is loaded
@@ -35,12 +35,11 @@ def pytest_configure(config):
     torch.backends.cuda.enable_flash_sdp(False)
     torch.backends.cuda.enable_mem_efficient_sdp(False)
     torch.backends.cuda.enable_math_sdp(True)
-    torch.set_float32_matmul_precision("high")
 
     warnings.warn(
         "ROCm: Set VLLM_ROCM_USE_SKINNY_GEMM=0 and disabled flash/mem-efficient "
-        "SDP (enabled math SDP, matmul precision 'high') to avoid "
-        "non-deterministic and HuggingFace Transformers accuracy issues",
+        "SDP (enabled math SDP) to avoid non-deterministic and HuggingFace "
+        "Transformers accuracy issues",
         UserWarning,
         stacklevel=1,
     )
