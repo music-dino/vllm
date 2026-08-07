@@ -1,6 +1,7 @@
 # SPDX-License-Identifier: Apache-2.0
 # SPDX-FileCopyrightText: Copyright contributors to the vLLM project
 import contextlib
+import functools
 import pathlib
 from copy import deepcopy
 
@@ -364,6 +365,28 @@ def _fix_v4_tied_weights_keys(model_cls: type) -> None:
         setattr(model_cls, "_tied_weights_keys", result)
 
 
+def _fix_missing_post_init(model_cls: type) -> None:
+    """Call `post_init()` for remote code that predates transformers v5.
+
+    v5 populates `all_tied_weights_keys` in `PreTrainedModel.post_init()` and
+    `from_pretrained` requires it, so remote code that never calls `post_init()`
+    (e.g. MiniCPM-V) cannot be loaded otherwise.
+    """
+    if "_vllm_post_init_patched" in model_cls.__dict__:
+        return
+
+    orig_init = getattr(model_cls, "__init__")
+
+    @functools.wraps(orig_init)
+    def __init__(self, *args, **kwargs):
+        orig_init(self, *args, **kwargs)
+        if not hasattr(self, "all_tied_weights_keys"):
+            self.post_init()
+
+    setattr(model_cls, "__init__", __init__)
+    setattr(model_cls, "_vllm_post_init_patched", True)
+
+
 class HfRunner:
     def get_default_device(self):
         from vllm.platforms import current_platform
@@ -504,6 +527,7 @@ class HfRunner:
                     )
                     if model_cls is not None:
                         _fix_v4_tied_weights_keys(model_cls)
+                        _fix_missing_post_init(model_cls)
 
             model = cast(
                 nn.Module,
